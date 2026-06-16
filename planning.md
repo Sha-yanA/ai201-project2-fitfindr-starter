@@ -202,7 +202,7 @@ Requirements: a valid `GROQ_API_KEY` set in `.env`.
 python verify.py
 ```
 
-To run the unit tests (no API key required — Groq is mocked):
+To run the unit tests (no API key required, Groq is mocked):
 
 ```bash
 pytest -v

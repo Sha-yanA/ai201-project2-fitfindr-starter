@@ -18,6 +18,8 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
+
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -92,9 +94,57 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
+    # Step 1: Initialize session
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: Parse query — extract max_price, size, and description via regex
+    price_match = re.search(r'(?:under|max|budget|below|up to)\s*\$?(\d+(?:\.\d+)?)', query, re.IGNORECASE)
+    max_price = float(price_match.group(1)) if price_match else None
+
+    # Strip price first so bare-number size patterns can't match digits from the price
+    price_stripped = query
+    if price_match:
+        price_stripped = price_stripped[:price_match.start()] + price_stripped[price_match.end():]
+
+    size_match = re.search(r'\bsize\s+([A-Za-z0-9/]+)\b', price_stripped, re.IGNORECASE)
+    if not size_match:
+        # catch bare sizes like "XS", "M", "S/M", "W30" — but NOT bare digits (would grab price remnants)
+        size_match = re.search(r'\b(XS|S/M|M/L|L/XL|S|M|L|XL|XXL|W\d{2}(?:\s*L\d{2})?)\b', price_stripped, re.IGNORECASE)
+    size = size_match.group(1) if size_match else None
+
+    # Strip size mentions from the price-stripped query to get a clean description
+    description = price_stripped
+    if size_match:
+        description = re.sub(r'\bsize\s+' + re.escape(size_match.group(1)) + r'\b', '', description, flags=re.IGNORECASE)
+        description = re.sub(r'\b' + re.escape(size_match.group(1)) + r'\b', '', description, flags=re.IGNORECASE)
+    description = re.sub(r'\s{2,}', ' ', description).strip(' ,.')
+
+    session["parsed"] = {"description": description, "size": size, "max_price": max_price}
+
+    # Step 3: Search listings — early exit if nothing found
+    results = search_listings(description, size=size, max_price=max_price)
+    session["search_results"] = results
+
+    if not results:
+        parts = [f"No listings matched '{description}'"]
+        if max_price is not None:
+            parts.append(f"under ${max_price:.0f}")
+        if size:
+            parts.append(f"in size {size}")
+        parts.append("Try a broader description, a higher budget, or remove the size filter.")
+        session["error"] = " ".join(parts)
+        return session
+
+    # Step 4: Select top result
+    session["selected_item"] = results[0]
+
+    # Step 5: Generate outfit suggestion
+    session["outfit_suggestion"] = suggest_outfit(session["selected_item"], wardrobe)
+
+    # Step 6: Create fit card
+    session["fit_card"] = create_fit_card(session["outfit_suggestion"], session["selected_item"])
+
+    # Step 7: Return completed session
     return session
 
 
@@ -121,3 +171,5 @@ if __name__ == "__main__":
         wardrobe=get_example_wardrobe(),
     )
     print(f"Error message: {session2['error']}")
+    print(f"fit_card:      {session2['fit_card']}")
+    print(f"outfit:        {session2['outfit_suggestion']}")
