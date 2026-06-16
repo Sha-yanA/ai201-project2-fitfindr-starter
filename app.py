@@ -53,6 +53,18 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
     # Step 3: Run agent
     session = run_agent(user_query.strip(), wardrobe)
 
+    print("\n" + "="*60)
+    print(f"QUERY:   {user_query.strip()}")
+    print(f"PARSED:  {session['parsed']}")
+    print(f"RESULTS: {len(session['search_results'])} listing(s) found")
+    if session["selected_item"]:
+        item = session["selected_item"]
+        print(f"SELECTED: {item['title']} — ${item['price']} on {item['platform']}")
+    print(f"OUTFIT:  {session['outfit_suggestion']}")
+    print(f"FITCARD: {session['fit_card']}")
+    print(f"ERROR:   {session['error']}")
+    print("="*60 + "\n")
+
     # Step 4: Early-exit on error
     if session["error"]:
         return session["error"], "", ""
