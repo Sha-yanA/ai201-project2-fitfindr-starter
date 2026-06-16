@@ -177,7 +177,12 @@ def search_listings(
 
 def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     """
-    Given a thrifted item and the user's wardrobe, suggest 1–2 complete outfits.
+    Given a thrifted item and the user's wardrobe, suggest outfit(s).
+
+    Output constraints:
+    - When the wardrobe has items: return 2–4 sentences describing specific
+      outfit pairings using named wardrobe pieces.
+    - When the wardrobe is empty: return 1–2 sentences of general styling advice.
 
     Args:
         new_item: A listing dict (the item the user is considering buying).
@@ -185,9 +190,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
                   wardrobe item dicts. May be empty — handle this gracefully.
 
     Returns:
-        A non-empty string with outfit suggestions.
-        If the wardrobe is empty, offer general styling advice for the item
-        rather than raising an exception or returning an empty string.
+        A non-empty string with outfit suggestions per the constraints above.
 
     TODO:
         1. Check whether wardrobe['items'] is empty.
@@ -218,7 +221,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
             prompt = (
                 f"A user is considering buying this secondhand item:\n{item_summary}\n\n"
                 "They haven't told you what else is in their wardrobe. "
-                "Give them 2–4 sentences of general styling advice: what kinds of bottoms, "
+                "Give them 1–2 sentences of general styling advice: what kinds of bottoms, "
                 "shoes, or layers pair well with this piece, and what overall vibe it suits."
             )
         else:
@@ -283,13 +286,13 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
     if not outfit or not outfit.strip():
         title = new_item.get("title", "a great piece")
         platform = new_item.get("platform", "a thrift platform")
-        return f"Found {title} on {platform} - styled and ready to wear."
+        return f"Found {title} on {platform} : styled and ready to wear."
 
     required_item_fields = {"title", "price", "platform"}
     if not required_item_fields.issubset(new_item.keys()):
         title = new_item.get("title", "a great piece")
         platform = new_item.get("platform", "a thrift platform")
-        return f"Found {title} on {platform} - styled and ready to wear."
+        return f"Found {title} on {platform} : styled and ready to wear."
 
     try:
         title = new_item.get("title", "this thrifted find")
