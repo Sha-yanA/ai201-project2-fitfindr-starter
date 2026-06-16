@@ -11,12 +11,15 @@ ai201-project2-fitfindr-starter/
 ├── data/
 │   ├── listings.json          # 40 mock secondhand listings
 │   └── wardrobe_schema.json   # Wardrobe format + example wardrobe
+├── tests/
+│   └── test_tools.py          # Unit tests for all three tools (Groq mocked)
 ├── utils/
 │   └── data_loader.py         # Helper functions for loading the data
 ├── tools.py                   # The three FitFindr tools
 ├── agent.py                   # Planning loop: orchestrates the tools
 ├── app.py                     # Gradio UI
-├── verify.py                  # End-to-end acceptance tests (requires API key)
+├── conftest.py                # pytest config: adds project root to sys.path
+├── verify.py                  # End-to-end acceptance tests (requires Groq API key)
 ├── planning.md                # Spec and design decisions
 └── requirements.txt           # Python dependencies
 ```
