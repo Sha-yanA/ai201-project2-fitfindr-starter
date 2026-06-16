@@ -49,7 +49,7 @@ Given a newly found thrift item and the user's existing wardrobe, generates a na
 - Output: 2–4 sentences. If `wardrobe['items']` is empty, return a generic styling tip (1–2 sentences).
 
 **What it returns:**
-A string - a 2–4 sentence outfit suggestion describing which wardrobe pieces to pair with the new item and how to wear them together (e.g. "Pair this tee with your baggy dark-wash jeans and chunky white sneakers. Throw your black denim jacket over it for an easy layered look.").
+A 2–4 sentence outfit suggestion describing which wardrobe pieces to pair with the new item and how to wear them together (e.g. "Pair this tee with your baggy dark-wash jeans and chunky white sneakers. Throw your black denim jacket over it for an easy layered look.").
 
 **What happens if it fails or returns nothing:**
 If `wardrobe['items']` is empty, the agent skips the pairing suggestions and returns a generic styling tip based solely on the new item's style_tags and colors (e.g. "This piece works great with high-waisted denim and white sneakers."). If the new_item dict is missing required fields, the agent notes "Could not generate a full outfit suggestion" and passes whatever it has to `create_fit_card`.
@@ -67,10 +67,10 @@ Produces a short, social-media-style caption summarizing the complete outfit - t
 
 **Function signature and output constraints:**
 - `def create_fit_card(outfit: str, new_item: Dict[str, Any]) -> str`
-- Output: 2–3 sentence social caption. When available, the caption must include `platform` and `price` (e.g., "off depop for $18"). If those fields are missing, fall back to a minimal caption that uses whatever is available.
+- Output: 2–4 sentence social caption. When available, the caption must include `platform` and `price` (e.g., "off depop for $18"). If those fields are missing, fall back to a minimal caption that uses whatever is available.
 
 **What it returns:**
-A string - a 2–3 sentence fit card caption in a casual, first-person Instagram-style voice. Example: "thrifted this faded band tee off depop for $22 and honestly it was made for my wide-legs 🖤 full look in my stories."
+A 2–4 sentence fit card caption in a casual, first-person Instagram-style voice. Example: "thrifted this faded band tee off depop for $22 and honestly it was made for my wide-legs 🖤 full look in my stories."
 
 **What happens if it fails or returns nothing:**
 If `outfit` is an empty string or `new_item` is missing key fields (`title`, `price`, `platform`), the agent returns a minimal fallback caption using only whatever data is available (e.g. "Found a great piece on [platform] - styled and ready to wear.") rather than failing silently.
@@ -140,7 +140,7 @@ For each tool, describe the specific failure mode you're handling and what the a
 | search_listings | No results match the query | Agent tells the user: "No listings matched '[query]' under $[price] in size [size]. Try a broader description, a higher budget, or remove the size filter." Stops and does not call suggest_outfit. |
 | suggest_outfit | Wardrobe is empty (`items` list is `[]`) | Agent generates a generic style tip based only on the new item's style_tags and colors, without referencing any wardrobe pieces. Still calls create_fit_card with this tip. |
 | create_fit_card | Outfit string is empty or new_item missing `title`/`price`/`platform` | Agent returns a minimal fallback caption: "Found [title or 'a great piece'] on [platform or 'a thrift platform'] - styled and ready to wear." Never fails silently. |
-| Any tool | File read / JSON parse / runtime exception (e.g., `load_listings()` fails) | Agent logs the error internally and returns a friendly user message: "Sorry, there was an internal data error-please try again later." Do not call downstream tools. Include enough logging for debugging but do not expose internal tracebacks to users. |
+| Any tool | File read / JSON parse / runtime exception (e.g., `load_listings()` fails) | Tools should return a safe failure value (for `search_listings` this is an empty list `[]`) and log the internal error. The agent is responsible for detecting tool-level failures (e.g., `results == []` from `search_listings` when a data load error occurred) and converting them into a friendly user-facing message such as: "Sorry, there was an internal data error, please try again later." Do not expose internal tracebacks to users. |
 
 ---
 
@@ -193,10 +193,19 @@ State / Session keys: `wardrobe`, `selected_item`, `outfit_suggestion`, `fit_car
 3. Empty-wardrobe path: use `get_empty_wardrobe()` and a valid listing → `suggest_outfit` returns a generic tip and `create_fit_card` returns a caption (no crash).
 
 **How to run these checks locally:**
-Run the verification script (or run these quick checks in a Python REPL that imports the implemented functions):
+
+A verification script `verify.py` is included in the project root. It runs all three acceptance tests against the real Groq API and prints `[PASS]`/`[FAIL]` per assertion with a short preview of each tool's output.
+
+Requirements: a valid `GROQ_API_KEY` set in `.env`.
 
 ```bash
-python -c "from utils.data_loader import load_listings, get_example_wardrobe, get_empty_wardrobe; from your_module import search_listings, suggest_outfit, create_fit_card; print(search_listings('vintage graphic tee','M',30))"
+python verify.py
+```
+
+To run the unit tests (no API key required — Groq is mocked):
+
+```bash
+pytest -v
 ```
 
 **Milestone 4 - Planning loop and state management:**

@@ -13,6 +13,8 @@ Tools:
 """
 
 import os
+import sys
+import re
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -32,6 +34,52 @@ def _get_groq_client():
             "GROQ_API_KEY not set. Add it to a .env file in the project root."
         )
     return Groq(api_key=api_key)
+
+
+# ── LLM output helpers ───────────────────────────────────────────────────────
+def _split_sentences(text: str) -> list[str]:
+    """Rudimentary sentence splitter. Returns list of sentence strings.
+
+    Splits on sentence-ending punctuation followed by whitespace. Keeps
+    punctuation on sentence ends. Falls back to the whole text if no split.
+    """
+    if not text or not text.strip():
+        return []
+    # Split on (?<=[.!?])\s+ to keep endings
+    parts = re.split(r'(?<=[.!?])\s+', text.strip())
+    parts = [p.strip() for p in parts if p.strip()]
+    return parts or [text.strip()]
+
+
+def _enforce_sentence_count(text: str, min_sents: int, max_sents: int, fallback_sentence: str) -> str:
+    """Ensure `text` contains between min_sents and max_sents sentences.
+
+    If there are too many sentences, keep the first `max_sents` sentences.
+    If there are too few, append the provided `fallback_sentence` until the
+    minimum is reached. Returns a cleaned string.
+    """
+    sentences = _split_sentences(text)
+    if len(sentences) > max_sents:
+        sentences = sentences[:max_sents]
+    while len(sentences) < min_sents:
+        # Append fallback sentence (ensure it ends with a period)
+        fs = fallback_sentence.strip()
+        if not fs.endswith(('.', '!', '?')):
+            fs += '.'
+        sentences.append(fs)
+    return ' '.join(sentences)
+
+
+def _simple_fallback_sentence_for_item(new_item: dict) -> str:
+    """Build a tiny generic styling sentence based on the new_item.
+
+    This is used when an LLM response is too short and we need extra
+    sentences to meet the minimum sentence requirement.
+    """
+    colors = new_item.get('colors', [])
+    color_part = f" in {colors[0]}" if colors else ""
+    category = new_item.get('category', 'the piece')
+    return f"Try pairing it with classic denim and white sneakers for an easy {category}{color_part} look"
 
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
@@ -69,8 +117,60 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    try:
+        listings = load_listings()
+
+        # Step 2: Hard filters
+        if max_price is not None:
+            listings = [l for l in listings if l["price"] <= max_price]
+
+        if size:
+            size_norm = size.strip().upper()
+            def _size_matches(listing_size: str) -> bool:
+                # Tokenize "S/M" → ["S", "M"] and "W30 L30" → ["W30", "L30"]
+                tokens = listing_size.strip().upper().replace("/", " ").split()
+                if size_norm in tokens:
+                    return True
+                # Numeric relaxation: "30" matches "W30", "L30" (leading alpha stripped)
+                if size_norm.isdigit():
+                    return any(t.lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == size_norm for t in tokens)
+                return False
+            listings = [l for l in listings if _size_matches(l.get("size", ""))]
+
+        # Step 3: Score by weighted keyword overlap (from planning.md spec)
+        weights = {"title": 0.5, "description": 0.3, "style_tags": 0.15, "category": 0.05}
+        query_words = set(description.lower().split())
+        condition_rank = {"excellent": 3, "good": 2, "fair": 1}
+
+        scored = []
+        for listing in listings:
+            title_words  = set(listing.get("title", "").lower().split())
+            desc_words   = set(listing.get("description", "").lower().split())
+            tag_words    = set(w for tag in listing.get("style_tags", []) for w in tag.lower().split())
+            cat_words    = set(listing.get("category", "").lower().split())
+
+            n = max(len(query_words), 1)
+            score = (
+                weights["title"]       * len(query_words & title_words) / n
+                + weights["description"] * len(query_words & desc_words)  / n
+                + weights["style_tags"]  * len(query_words & tag_words)   / n
+                + weights["category"]    * len(query_words & cat_words)   / n
+            )
+
+            if score > 0:
+                scored.append((score, listing))
+
+        # Step 5: Sort by higher score, then lower price, then better condition (tie-break)
+        scored.sort(key=lambda x: (
+            -x[0],
+            x[1]["price"],
+            -condition_rank.get(x[1].get("condition", "fair"), 1),
+        ))
+
+        return [listing for _, listing in scored[:3]]
+    except Exception as exc:
+        print(f"[FitFindr] search_listings error: {exc}", file=sys.stderr)
+        return []
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -100,8 +200,55 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    required = {"title", "colors", "style_tags", "category"}
+    if not required.issubset(new_item.keys()):
+        return "Could not generate a full outfit suggestion - new item is missing key fields."
+
+    try:
+        client = _get_groq_client()
+        item_summary = (
+            f"Title: {new_item.get('title', 'Unknown')}\n"
+            f"Category: {new_item.get('category', 'Unknown')}\n"
+            f"Colors: {', '.join(new_item.get('colors', []))}\n"
+            f"Style tags: {', '.join(new_item.get('style_tags', []))}\n"
+            f"Condition: {new_item.get('condition', 'Unknown')}"
+        )
+
+        if not wardrobe.get("items"):
+            prompt = (
+                f"A user is considering buying this secondhand item:\n{item_summary}\n\n"
+                "They haven't told you what else is in their wardrobe. "
+                "Give them 2–4 sentences of general styling advice: what kinds of bottoms, "
+                "shoes, or layers pair well with this piece, and what overall vibe it suits."
+            )
+        else:
+            wardrobe_lines = "\n".join(
+                f"- {item['name']} ({item['category']}): {', '.join(item.get('colors', []))} - "
+                f"tags: {', '.join(item.get('style_tags', []))}"
+                + (f" | notes: {item['notes']}" if item.get("notes") else "")
+                for item in wardrobe["items"]
+            )
+            prompt = (
+                f"A user is considering buying this secondhand item:\n{item_summary}\n\n"
+                f"Here is what they already own:\n{wardrobe_lines}\n\n"
+                "Suggest 1–2 complete outfits that combine the new item with specific pieces "
+                "from their wardrobe. Name the exact wardrobe pieces. Keep it to 2–4 sentences, "
+                "casual and specific - like advice from a stylish friend, not a fashion magazine."
+            )
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=200,
+        )
+        raw = response.choices[0].message.content.strip()
+        if not wardrobe.get('items'):
+            return _enforce_sentence_count(raw, 1, 2, _simple_fallback_sentence_for_item(new_item))
+        return _enforce_sentence_count(raw, 2, 4, _simple_fallback_sentence_for_item(new_item))
+    except Exception as exc:
+        print(f"[FitFindr] suggest_outfit error: {exc}", file=sys.stderr)
+        return "Sorry, there was an internal error generating an outfit suggestion. Please try again."
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -133,5 +280,47 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    if not outfit or not outfit.strip():
+        title = new_item.get("title", "a great piece")
+        platform = new_item.get("platform", "a thrift platform")
+        return f"Found {title} on {platform} - styled and ready to wear."
+
+    required_item_fields = {"title", "price", "platform"}
+    if not required_item_fields.issubset(new_item.keys()):
+        title = new_item.get("title", "a great piece")
+        platform = new_item.get("platform", "a thrift platform")
+        return f"Found {title} on {platform} - styled and ready to wear."
+
+    try:
+        title = new_item.get("title", "this thrifted find")
+        price = new_item.get("price")
+        platform = new_item.get("platform", "a thrift platform")
+        condition = new_item.get("condition", "")
+
+        price_str = f"${price:.0f}" if price is not None else "a steal"
+        condition_str = f", {condition} condition" if condition else ""
+
+        prompt = (
+            f"Write a 2–4 sentence Instagram/TikTok caption for this thrifted outfit.\n\n"
+            f"Item: {title}\n"
+            f"Bought from: {platform} for {price_str}{condition_str}\n"
+            f"Outfit details: {outfit.strip()}\n\n"
+            "Rules:\n"
+            "- Casual, first-person, authentic - like a real OOTD post\n"
+            "- Mention the item name, price, and platform naturally (once each)\n"
+            "- Capture the specific vibe of the outfit\n"
+            "- No hashtags, no quotes around the caption, just the caption itself"
+        )
+
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1.1,
+            max_tokens=150,
+        )
+        raw = response.choices[0].message.content.strip()
+        return _enforce_sentence_count(raw, 2, 4, _simple_fallback_sentence_for_item(new_item))
+    except Exception as exc:
+        print(f"[FitFindr] create_fit_card error: {exc}", file=sys.stderr)
+        return "Sorry, there was an internal error generating a fit card. Please try again."
